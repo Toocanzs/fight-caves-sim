@@ -2,7 +2,7 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
-		<title>My first three.js app</title>
+		<title>Fight Caves Simulator</title>
 		<style>
 			body { margin: 0; }
 		</style>
@@ -27,6 +27,7 @@
 			import { FirstPersonControls } from 'three/addons/controls/FirstPersonControls.js';
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 			import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+			import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 			let camera, scene, renderer;
 
@@ -39,6 +40,77 @@
 
 			scene = new THREE.Scene();
 
+			fetch('model/rs/fight-caves/heights.json')
+				.then(response => response.text())
+				.then((data) => {
+					let heights = JSON.parse(data)
+
+					let getHeightSafe = function(z, x, y) {
+						if (x < 0) x = 0;
+						if (y < 0) y = 0;
+						if (z < 0) z = 0;
+
+						if (x >= 64) x = 63;
+						if (y >= 64) y = 63;
+						if (z >= 4) z = 3;
+
+						//x = 64 - x;
+						y = 64 - y;
+
+						if (!heights[z][x]) return 0;
+						if (!heights[z][x][y]) return 0;
+
+
+						return -heights[z][x][y];
+					}
+
+					let lastGeometry = undefined;
+					let plane = heights[0];
+					for (let x = 0; x < plane.length; x++) {
+						for (let y = 0; y < plane[x].length; y++) {
+							let height = plane[x][y];
+							let z = 0;
+
+							const geometry = new THREE.BufferGeometry();
+
+							let baseX = x*1.28;
+							let baseY = y*1.28 - 81.92;
+
+							// 1.28 because tiles are 128 units wide, but for whatever reason the export comes out scaled 1.28 times
+							// And the /100 *should* be /128 but for similar reasons since the heights we export are not scale by the 1.28 times they're just 100 times larger? idk but this works perfectly
+							const vertices = new Float32Array( [
+								baseX + 0.0,   getHeightSafe(z, x + 0, y + 1)/100, baseY + 1.28,
+								baseX + 1.28,  getHeightSafe(z, x + 1, y + 1)/100, baseY + 1.28,
+								baseX + 1.28,  getHeightSafe(z, x + 1, y + 0)/100, baseY + 0.0,
+								baseX + 0.0,   getHeightSafe(z, x + 0, y + 0)/100, baseY + 0.0,
+							] );
+
+							const indices = [
+								0, 1, 2,
+								2, 3, 0,
+							];
+
+							geometry.setIndex( indices );
+							geometry.setAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
+						
+							if (lastGeometry) {
+								lastGeometry = BufferGeometryUtils.mergeGeometries([lastGeometry, geometry]);
+							} else {
+								lastGeometry = geometry;
+							}
+							
+						}
+					}
+					const material = new THREE.MeshStandardMaterial();
+					material.side = THREE.DoubleSide;
+					lastGeometry.computeVertexNormals()
+					const terrainMesh = new THREE.Mesh(lastGeometry, material);
+					scene.add(terrainMesh);
+					terrainMesh.position.set(0,0.05,0);
+					const directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
+					scene.add( directionalLight );
+			})
+
 			const loader = new GLTFLoader().setPath( 'model/rs/fight-caves/' );
 				loader.load( 'scene.gltf', function ( gltf ) {
 
@@ -46,7 +118,6 @@
 					model.traverse((o) => {
 						if (!o.isMesh) return;
 						
-						// Convert to unlit
 						var prevMaterial = o.material;
 						o.material = new THREE.MeshBasicMaterial();
 						THREE.MeshBasicMaterial.prototype.copy.call(o.material, prevMaterial);
@@ -72,7 +143,7 @@
 			controls.constrainVertical = true;
 			controls.movementSpeed = 30;
 			controls.lookSpeed = Math.PI / 12;
-
+			
 			window.addEventListener( 'resize', onWindowResize );
 
 			let lt = new Date();
