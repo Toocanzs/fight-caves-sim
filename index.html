@@ -34,11 +34,11 @@
 			document.body.appendChild( container );
 
 			camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.25, 1000 );
-			camera.position.set( 30, 30, -30 );
+			camera.position.set( 39, 41, 16);
+			camera.lookAt( 41, 6, -41);
 
 			scene = new THREE.Scene();
 
-			// model
 			const loader = new GLTFLoader().setPath( 'model/rs/fight-caves/' );
 				loader.load( 'scene.gltf', function ( gltf ) {
 
@@ -46,17 +46,11 @@
 					model.traverse((o) => {
 						if (!o.isMesh) return;
 						
-						o.material.flatShading = true;
-
+						// Convert to unlit
 						var prevMaterial = o.material;
 						o.material = new THREE.MeshBasicMaterial();
-
 						THREE.MeshBasicMaterial.prototype.copy.call(o.material, prevMaterial);
-
-
-						console.log(o.material);
-
-						
+						o.material.flatShading = true;
 					});
 
 					scene.add( gltf.scene );
@@ -72,11 +66,6 @@
 			renderer.setClearColor(0xff0f0a0a);
 			container.appendChild( renderer.domElement );
 
-			/*const controls = new FlyControls( camera, renderer.domElement );
-			controls.dragToLook = true;
-			controls.movementSpeed = 30;
-			controls.rollSpeed = Math.PI / 2;
-			controls.autoForward = false;*/
 			const controls = new FirstPersonControls(camera, renderer.domElement);
 			controls.activeLook = true;
 			controls.autoForwared = false;
