@@ -31,6 +31,9 @@
 			import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 			const HEIGHT_DIV = 100;
+			const CLIENT_PLANE = 0;
+
+			const DEBUG_COLLISIONS = false;
 
 			let camera, scene, renderer;
 
@@ -38,11 +41,10 @@
 			document.body.appendChild( container );
 
 			camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.25, 1000 );
-			camera.position.set( 28, 31, 66);
-			camera.lookAt( 30, 4, 32);
 
 			scene = new THREE.Scene();
 			let heights;
+			let collisionData;
 			function getHeightSafe(z, x, y) {
 				if (x < 0) x = 0;
 				if (y < 0) y = 0;
@@ -68,6 +70,18 @@
 
 			let promises = [];
 
+			promises.push(fetch('model/rs/fight-caves/collision.json')
+				.then(response => response.text())
+				.then((data) => {
+					collisionData = JSON.parse(data);
+					// Flip y so we don't have to deal with negatives everywhere
+					for (let z = 0; z < collisionData.length; z++) {
+						for(let x = 0; x < collisionData[z].length; x++) {
+							collisionData[z][x].reverse();
+						}
+					}
+				}));
+
 			promises.push(fetch('model/rs/fight-caves/heights.json')
 				.then(response => response.text())
 				.then((data) => {
@@ -80,7 +94,7 @@
 						}
 					}
 
-					let z = 0;
+					let z = CLIENT_PLANE;
 					let plane = heights[z];
 					for (let x = 0; x < plane.length; x++) {
 						for (let y = 0; y < plane[x].length; y++) {
@@ -151,15 +165,6 @@
 
 					const directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
 					scene.add( directionalLight );
-
-					function onPointerMove(event) {
-						pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-						pointer.y = - (event.clientY / window.innerHeight) * 2 + 1;
-					}
-
-					window.addEventListener('mousemove', onPointerMove);
-
-					
 			}));
 
 			function loadNpc(folder, glbFile) {
@@ -200,7 +205,7 @@
 						});
 
 						scene.add(gltf.scene);
-						gltf.scene.scale.set(1.0/1.28, 1, 1.0/1.28);
+						gltf.scene.scale.set(1.0/1.28, 1, 1.0/1.28); // For whatever reason the tiles are 1.28 units instead of 1. This is probably due to tile size being 128 units so the scaling would be 128/100
 						gltf.scene.position.set(0,0,64);
 						resolve(gltf.scene);
 					}));
@@ -211,6 +216,52 @@
 			
 			await Promise.all(promises);
 
+			let collisionTiles = [];
+			if (DEBUG_COLLISIONS) {
+				const BLOCK_MOVEMENT_NORTH_WEST = 0x1;
+				const BLOCK_MOVEMENT_NORTH = 0x2;
+				const BLOCK_MOVEMENT_NORTH_EAST = 0x4;
+				const BLOCK_MOVEMENT_EAST = 0x8;
+				const BLOCK_MOVEMENT_SOUTH_EAST = 0x10;
+				const BLOCK_MOVEMENT_SOUTH = 0x20;
+				const BLOCK_MOVEMENT_SOUTH_WEST = 0x40;
+				const BLOCK_MOVEMENT_WEST = 0x80;
+				const BLOCK_MOVEMENT_OBJECT = 0x100;
+				const BLOCK_MOVEMENT_FLOOR_DECORATION = 0x40000;
+				const BLOCK_MOVEMENT_FLOOR = 0x200000;
+
+				const BLOCK_LINE_OF_SIGHT_NORTH = BLOCK_MOVEMENT_NORTH << 9;
+				const BLOCK_LINE_OF_SIGHT_EAST = BLOCK_MOVEMENT_EAST << 9;
+				const BLOCK_LINE_OF_SIGHT_SOUTH = BLOCK_MOVEMENT_SOUTH << 9;
+				const BLOCK_LINE_OF_SIGHT_WEST = BLOCK_MOVEMENT_WEST << 9;
+				const BLOCK_LINE_OF_SIGHT_FULL = 0x20000;
+				
+
+				let z = CLIENT_PLANE;
+				let plane = collisionData[z];
+				console.log(plane.length);
+				for (let x = 0; x < plane.length; x++) {
+					for (let y = 0; y < plane[x].length; y++) {
+						let collision = plane[x][y];
+
+						if ((collision & (BLOCK_LINE_OF_SIGHT_FULL | BLOCK_MOVEMENT_FLOOR)) == 0) {
+							/*const geometry = new THREE.BoxGeometry( 1, 1, 1 ); 
+							const material = new THREE.MeshStandardMaterial( {color: 0x00ff00} ); 
+							const cube = new THREE.Mesh( geometry, material ); 
+							scene.add(cube);
+							cube.position.set(x-7.5, getHeightSafe(z, x, y) + 5, y - 47.5);*/
+							let a = tileHighlightMeshes[x];
+							if (!a) continue;
+							let b = a[y];
+							if (!b) continue;
+							collisionTiles.push(b);
+						}
+					}
+				}
+			}
+
+
+
 			function lerp (start, end, amt){
 				return (1-amt)*start+amt*end
 			}
@@ -220,7 +271,7 @@
 				let iy = Math.floor(y);
 				let fx = x - ix;
 				let fy = y - iy;
-				let plane = 0;
+				let plane = CLIENT_PLANE;
 				
 				let bl = getHeightSafe(plane, ix + 0, iy + 0);
 				let br = getHeightSafe(plane, ix + 1, iy + 0);
@@ -236,6 +287,21 @@
 
 			let oldMan = await oldManPromise;
 
+			let playerTile = {x:32, y:32};
+			let playerPos = new THREE.Vector3(playerTile.x, getHeightSafe(CLIENT_PLANE, playerTile.x, playerTile.y), playerTile.y);
+			let cameraPitch = -Math.PI/4;
+			let cameraYaw = 0;
+			let cameraZoom = 30;
+			let middleMouseDown = false;
+			let cameraRotationSpeed = 1.5;
+			let cameraZoomSpeed = 0.01;
+			let cameraPos;
+			let smoothPlayerPos;
+			const CAMERA_PITCH_MAX = -0.2;
+			const CAMERA_PITCH_MIN = -Math.PI/2;
+			const CAMERA_ZOOM_MAX = 80;
+			const CAMERA_ZOOM_MIN = 1;
+
 			renderer = new THREE.WebGLRenderer( { antialias: true } );
 			renderer.setPixelRatio( window.devicePixelRatio );
 			renderer.setSize( window.innerWidth, window.innerHeight );
@@ -244,48 +310,117 @@
 			renderer.useLegacyLights = false;
 			renderer.setClearColor(0xff0f0a0a);
 			container.appendChild( renderer.domElement );
-
-			const controls = new FirstPersonControls(camera, renderer.domElement);
-			controls.activeLook = true;
-			controls.autoForwared = false;
-			controls.constrainVertical = true;
-			controls.movementSpeed = 30;
-			controls.lookSpeed = Math.PI / 12;
 			
 			window.addEventListener( 'resize', onWindowResize );
 
-			const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5); // soft white light
+			const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
 			directionalLight.position.set(-50, 10, -50);
 			scene.add(directionalLight);
 
-			const ambientLight = new THREE.AmbientLight(0x808080); // soft white light
+			const ambientLight = new THREE.AmbientLight(0xc08080);
 			scene.add(ambientLight);
 
 			var clock = new THREE.Clock();
 			let t = 0;
+			let tickTimer = 0;
+
+			function onPointerMove(event) {
+				let lastPointer = pointer.clone();
+				pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+				pointer.y = - (event.clientY / window.innerHeight) * 2 + 1;
+
+				let delta = pointer.clone().sub(lastPointer);
+				if (middleMouseDown) {
+					cameraPitch += delta.y*cameraRotationSpeed;
+					cameraYaw -= delta.x*cameraRotationSpeed;
+				}
+			}
+
+			function onPointerDown(event) {
+				if (event.button == 0) { // Left click
+					let hitTile = raycastFirstTile(pointer, camera, raycaster);
+					if (hitTile) {
+						playerTile = hitTile.object.tileCoords;
+					}
+				}
+				if (event.button == 1) { // middle mouse
+					middleMouseDown = true;
+				}
+			}
+			function onPointerUp(event) {
+				if (event.button == 1) { // middle mouse
+					middleMouseDown = false;
+				}
+			}
+			function onWheel(event) {
+				cameraZoom += event.deltaY * cameraZoomSpeed * cameraZoom/30; // multiplied by a factor of cameraZoom so we zoom out faster towards the max and slower towards the min
+			}
+			window.addEventListener('pointerdown', onPointerDown, false);
+			window.addEventListener('pointerup', onPointerUp, false);
+			window.addEventListener('pointermove', onPointerMove, false);
+			window.addEventListener("wheel", onWheel, false);
+
+			function raycastFirstTile(pointer, camera, raycaster) {
+				raycaster.setFromCamera( pointer, camera );
+				const intersects = raycaster.intersectObjects(tileCollisions, false);
+				for ( let i = 0; i < intersects.length; i ++ ) {
+					return intersects[i]; // NOTE: Returns only the first 
+				}
+
+				return undefined;
+			}
+			
 			function loop() {
 				let dt = clock.getDelta();
 				t += dt;
+				tickTimer += dt;
 				requestAnimationFrame(loop);
-				controls.activeLook = controls.mouseDragOn;
-				controls.update(dt);
 
 				for (let i = 0; i < tileCollisions.length; i++) {
 					scene.remove(tileCollisions[i]);
 				}
-
-				// Intersect tiles
-				raycaster.setFromCamera( pointer, camera );
-				const intersects = raycaster.intersectObjects(tileCollisions, false);
-				for ( let i = 0; i < intersects.length; i ++ ) {
-					if (i > 0) break; // Only first
-					scene.add(intersects[i].object);
+				for (let i = 0; i < collisionTiles.length; i++) {
+					scene.add(collisionTiles[i].base);
 				}
+
+				playerPos = new THREE.Vector3(playerTile.x + 0.5, getHeightInterpolated(playerTile.x + 0.5, playerTile.y + 0.5), playerTile.y + 0.5);
+
+				cameraYaw = cameraYaw % (2*Math.PI);
+				if (cameraPitch > CAMERA_PITCH_MAX) cameraPitch = CAMERA_PITCH_MAX;
+				if (cameraPitch < CAMERA_PITCH_MIN) cameraPitch = CAMERA_PITCH_MIN;
+				if (cameraZoom < CAMERA_ZOOM_MIN) cameraZoom = CAMERA_ZOOM_MIN;
+				if (cameraZoom > CAMERA_ZOOM_MAX) cameraZoom = CAMERA_ZOOM_MAX;
+
+				let cameraEuler = new THREE.Euler(cameraPitch, cameraYaw, 0, "YXZ");
+				let targetPos = playerPos.clone();
+				if (!smoothPlayerPos) {
+					smoothPlayerPos = playerPos;
+				}
+				smoothPlayerPos = smoothPlayerPos.lerp(playerPos, Math.pow(0.5, dt) * 0.01);
+				
+				cameraPos = smoothPlayerPos.clone().add(new THREE.Vector3(0, 0, cameraZoom).applyEuler(cameraEuler))
+				camera.position.copy(cameraPos); 
+				camera.rotation.copy(new THREE.Euler(cameraPitch, cameraYaw, 0, "YXZ"));
+
+				let hitTile = raycastFirstTile(pointer, camera, raycaster);
+				if (hitTile) {
+					scene.add(hitTile.object);
+				}
+
+				while (tickTimer > 0.6) {
+					tick();
+					tickTimer -= 0.6;
+				}
+
 				renderer.render(scene, camera);
 
-				let sx = Math.sin(t*0.2)*15 + 39;
-				let sy = Math.cos(t*0.2)*15 + 29;
-				oldMan.position.set(sx, getHeightInterpolated(sx, sy),sy);
+				let sx = Math.sin(t*0.5)*20 + 32;
+				let sy = Math.cos(t*0.5)*20 + 32;
+				oldMan.position.copy(smoothPlayerPos);
+			}
+
+			function tick() {
+				console.log("tick");
 			}
 
 			function onWindowResize() {
